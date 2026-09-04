@@ -1,0 +1,224 @@
+<template>
+    <div class="gsr-dashboard">
+        <template if:true={isLoading}>
+            <lightning-spinner alternative-text="Loading" size="medium" class="gsr-spinner"></lightning-spinner>
+        </template>
+
+        <!-- Header -->
+        <div class="gsr-header">
+            <div class="gsr-header-titles">
+                <p class="gsr-eyebrow">GUEST SENTIMENT RADAR</p>
+                <h1 class="gsr-title">{title}</h1>
+            </div>
+            <div class="gsr-header-actions">
+                <template if:true={lastUpdatedLabel}>
+                    <span class="gsr-updated">Updated {lastUpdatedLabel}</span>
+                </template>
+                <lightning-button-icon icon-name="utility:refresh" variant="border-filled" alternative-text="Refresh" title="Refresh" onclick={handleRefresh}></lightning-button-icon>
+            </div>
+        </div>
+
+        <template if:true={hasError}>
+            <div class="gsr-card gsr-error-banner">
+                <strong>Dashboard data call failed:</strong> {errorMessage}
+            </div>
+        </template>
+
+        <!-- Filter bar -->
+        <div class="gsr-card gsr-filterbar">
+            <div class="gsr-filter-row">
+                <div class="gsr-filter-group">
+                    <span class="gsr-filter-label">Date range</span>
+                    <lightning-combobox
+                        name="datePreset"
+                        variant="label-hidden"
+                        value={datePreset}
+                        options={datePresetOptions}
+                        onchange={handleDatePresetChange}
+                        class="gsr-date-combo"
+                    ></lightning-combobox>
+                    <template if:true={showCustomDateRange}>
+                        <lightning-input type="date" label="From" variant="label-hidden" value={customFrom} onchange={handleCustomFromChange} class="gsr-date-input"></lightning-input>
+                        <span class="gsr-date-sep">–</span>
+                        <lightning-input type="date" label="To" variant="label-hidden" value={customTo} onchange={handleCustomToChange} class="gsr-date-input"></lightning-input>
+                    </template>
+                </div>
+
+                <div class="gsr-filter-group">
+                    <span class="gsr-filter-label">Status</span>
+                    <div class="gsr-pillrow">
+                        <template for:each={statusPills} for:item="p">
+                            <button key={p.value} class={p.cssClass} data-value={p.value} onclick={handleStatusToggle}>{p.label}</button>
+                        </template>
+                    </div>
+                </div>
+
+                <div class="gsr-filter-group">
+                    <lightning-input type="toggle" label="Escalated only" checked={escalatedOnly} onchange={handleEscalatedToggle} class="gsr-toggle"></lightning-input>
+                </div>
+
+                <div class="gsr-filter-group gsr-filter-clear">
+                    <template if:true={hasActiveFilters}>
+                        <lightning-button label="Clear filters" icon-name="utility:clear" variant="base" onclick={handleClearFilters}></lightning-button>
+                    </template>
+                </div>
+            </div>
+
+            <div class="gsr-filter-row">
+                <div class="gsr-filter-group">
+                    <span class="gsr-filter-label">Floor</span>
+                    <div class="gsr-pillrow">
+                        <template for:each={floorPills} for:item="p">
+                            <button key={p.value} class={p.cssClass} data-value={p.value} onclick={handleFloorToggle}>{p.label}</button>
+                        </template>
+                    </div>
+                </div>
+
+                <div class="gsr-filter-group">
+                    <span class="gsr-filter-label">Department</span>
+                    <div class="gsr-pillrow">
+                        <template for:each={departmentPills} for:item="p">
+                            <button key={p.value} class={p.cssClass} data-value={p.value} onclick={handleDepartmentToggle}>{p.label}</button>
+                        </template>
+                    </div>
+                </div>
+
+                <div class="gsr-filter-group">
+                    <span class="gsr-filter-label">Severity</span>
+                    <div class="gsr-pillrow">
+                        <template for:each={severityPills} for:item="p">
+                            <button key={p.value} class={p.cssClass} data-value={p.value} onclick={handleSeverityToggle}>{p.label}</button>
+                        </template>
+                    </div>
+                </div>
+
+                <div class="gsr-filter-group">
+                    <span class="gsr-filter-label">Sentiment</span>
+                    <div class="gsr-pillrow">
+                        <template for:each={sentimentPills} for:item="p">
+                            <button key={p.value} class={p.cssClass} data-value={p.value} onclick={handleSentimentToggle}>{p.label}</button>
+                        </template>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- KPI tiles -->
+        <div class="gsr-kpi-grid">
+            <template for:each={kpis} for:item="k">
+                <div key={k.key} class={k.tileClass}>
+                    <p class="gsr-kpi-value">{k.value}</p>
+                    <p class="gsr-kpi-label">{k.label}</p>
+                </div>
+            </template>
+        </div>
+
+        <template if:true={hasCases}>
+            <!-- Charts -->
+            <div class="gsr-chart-grid">
+                <div class="gsr-card">
+                    <h3 class="gsr-card-title">Cases by Department</h3>
+                    <div class="gsr-bar-list">
+                        <template for:each={departmentBars} for:item="b">
+                            <div key={b.label} class="gsr-bar-row">
+                                <span class="gsr-bar-label">{b.label}</span>
+                                <div class="gsr-bar-track">
+                                    <div class="gsr-bar-fill" style={b.fillStyle}></div>
+                                </div>
+                                <span class="gsr-bar-count">{b.count}</span>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+
+                <div class="gsr-card">
+                    <h3 class="gsr-card-title">Cases by Severity</h3>
+                    <div class="gsr-donut-wrap">
+                        <div class="gsr-donut" style={severityDonutStyle}></div>
+                        <div class="gsr-legend">
+                            <template for:each={severityLegend} for:item="l">
+                                <div key={l.key} class="gsr-legend-row">
+                                    <span class="gsr-swatch" style={l.swatchStyle}></span>
+                                    <span class="gsr-legend-label">{l.label}</span>
+                                    <span class="gsr-legend-value">{l.count} ({l.pct}%)</span>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="gsr-card">
+                    <h3 class="gsr-card-title">Cases by Sentiment</h3>
+                    <div class="gsr-donut-wrap">
+                        <div class="gsr-donut" style={sentimentDonutStyle}></div>
+                        <div class="gsr-legend">
+                            <template for:each={sentimentLegend} for:item="l">
+                                <div key={l.key} class="gsr-legend-row">
+                                    <span class="gsr-swatch" style={l.swatchStyle}></span>
+                                    <span class="gsr-legend-label">{l.label}</span>
+                                    <span class="gsr-legend-value">{l.count} ({l.pct}%)</span>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="gsr-card">
+                    <h3 class="gsr-card-title">Cases Filed Over Time</h3>
+                    <div class="gsr-trend">
+                        <template for:each={trendBars} for:item="t">
+                            <div key={t.key} class="gsr-trend-col">
+                                <div class="gsr-trend-bar-track">
+                                    <div class="gsr-trend-bar" style={t.barStyle} title={t.count}></div>
+                                </div>
+                                <span class="gsr-trend-label">{t.label}</span>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Resource load -->
+            <div class="gsr-card">
+                <h3 class="gsr-card-title">Staff Workload (open cases per employee)</h3>
+                <div class="gsr-resource-list">
+                    <template for:each={resourceRows} for:item="r">
+                        <div key={r.key} class="gsr-resource-row">
+                            <span class={r.statusDotClass}></span>
+                            <span class="gsr-resource-name">{r.name}</span>
+                            <span class="gsr-resource-dept">{r.department}</span>
+                            <div class="gsr-bar-track gsr-resource-track">
+                                <div class="gsr-bar-fill" style={r.fillStyle}></div>
+                            </div>
+                            <span class="gsr-bar-count">{r.openCount}</span>
+                            <span class="gsr-resource-status">{r.statusLabel}</span>
+                        </div>
+                    </template>
+                </div>
+            </div>
+
+            <!-- Case list -->
+            <div class="gsr-card">
+                <h3 class="gsr-card-title">Cases ({data.totalCases})</h3>
+                <lightning-datatable
+                    key-field="id"
+                    data={caseRows}
+                    columns={caseColumns}
+                    hide-checkbox-column
+                    show-row-number-column
+                ></lightning-datatable>
+            </div>
+        </template>
+
+        <template if:false={hasCases}>
+            <div class="gsr-card gsr-empty-state">
+                <lightning-icon icon-name="utility:announcement" size="large" class="gsr-empty-icon"></lightning-icon>
+                <h3 class="gsr-empty-title">No cases match these filters yet</h3>
+                <p class="gsr-empty-body">
+                    Once a guest reports an issue through the in-room QR assistant, it will show up here in real time.
+                    Try widening the date range or clearing filters.
+                </p>
+            </div>
+        </template>
+    </div>
+</template>
