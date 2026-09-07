@@ -1,0 +1,157 @@
+public without sharing class GuestStayDashboardController {
+
+    public class StayDashboardData {
+        @AuraEnabled public Contact guest;
+        @AuraEnabled public Guest_Stay__c currentStay;
+        @AuraEnabled public Room__c room;
+        @AuraEnabled public List<PastStayWrapper> pastStays;
+        @AuraEnabled public Integer totalStays;
+        @AuraEnabled public List<ServiceItem> serviceItems;
+    }
+
+    public class PastStayWrapper {
+        @AuraEnabled public Id id;
+        @AuraEnabled public String dates;
+        @AuraEnabled public String room;
+        @AuraEnabled public String roomType;
+        @AuraEnabled public Integer nights;
+        @AuraEnabled public Integer rating;
+        @AuraEnabled public String ratingStars;
+    }
+
+    public class ServiceItem {
+        @AuraEnabled public String icon;
+        @AuraEnabled public String label;
+        @AuraEnabled public String description;
+    }
+
+    @AuraEnabled(cacheable=true)
+    public static StayDashboardData getGuestStayData(String roomNumber) {
+        StayDashboardData result = new StayDashboardData();
+
+        // 1. Find active stay for this room
+        List<Guest_Stay__c> stays = [
+            SELECT Id, Name, Check_In_Date__c, Check_Out_Date__c, Status__c,
+                   Rate_Per_Night__c, Special_Requests__c, Rating__c,
+                   Guest__c, Guest__r.Name, Guest__r.Phone, Guest__r.Email,
+                   Guest__r.Loyalty_Tier__c, Guest__r.Member_Since__c,
+                   Guest__r.Lifetime_Value__c,
+                   Room__c, Room__r.Name, Room__r.Floor__c,
+                   Room__r.Room_Type__c, Room__r.Amenities__c,
+                   Room__r.Wi_Fi_Code__c
+            FROM Guest_Stay__c
+            WHERE Room__r.Name = :roomNumber
+              AND Status__c = 'Active'
+            ORDER BY Check_In_Date__c DESC
+            LIMIT 1
+        ];
+
+        if (stays.isEmpty()) {
+            return null;
+        }
+
+        Guest_Stay__c activeStay = stays[0];
+        result.currentStay = activeStay;
+        result.guest = activeStay.Guest__r;
+        result.room = activeStay.Room__r;
+
+        // 2. Count total stays for this guest
+        result.totalStays = [
+            SELECT COUNT()
+            FROM Guest_Stay__c
+            WHERE Guest__c = :activeStay.Guest__c
+        ];
+
+        // 3. Get past (completed) stays
+        List<Guest_Stay__c> historical = [
+            SELECT Id, Check_In_Date__c, Check_Out_Date__c,
+                   Rating__c, Room__r.Name, Room__r.Room_Type__c
+            FROM Guest_Stay__c
+            WHERE Guest__c = :activeStay.Guest__c
+              AND Status__c = 'Completed'
+              AND Id != :activeStay.Id
+            ORDER BY Check_In_Date__c DESC
+            LIMIT 10
+        ];
+
+        result.pastStays = new List<PastStayWrapper>();
+        for (Guest_Stay__c hs : historical) {
+            PastStayWrapper pw = new PastStayWrapper();
+            pw.id = hs.Id;
+            pw.room = hs.Room__r.Name;
+            pw.roomType = hs.Room__r.Room_Type__c;
+            pw.rating = hs.Rating__c != null ? Integer.valueOf(hs.Rating__c) : 0;
+
+            // Calculate nights
+            if (hs.Check_In_Date__c != null && hs.Check_Out_Date__c != null) {
+                Long ms = hs.Check_Out_Date__c.getTime() - hs.Check_In_Date__c.getTime();
+                pw.nights = Integer.valueOf(ms / (1000 * 60 * 60 * 24));
+            } else {
+                pw.nights = 0;
+            }
+
+            // Format dates: "Mar 12–15, 2026"
+            pw.dates = formatStayDates(hs.Check_In_Date__c, hs.Check_Out_Date__c);
+
+            // Build star string
+            String stars = '';
+            for (Integer i = 0; i < 5; i++) {
+                stars += (i < pw.rating) ? '★' : '☆';
+            }
+            pw.ratingStars = stars;
+
+            result.pastStays.add(pw);
+        }
+
+        // 4. Build service items
+        result.serviceItems = getServiceItems();
+
+        return result;
+    }
+
+    private static String formatStayDates(Datetime checkIn, Datetime checkOut) {
+        if (checkIn == null || checkOut == null) return '';
+
+        String[] months = new String[]{
+            'Jan','Feb','Mar','Apr','May','Jun',
+            'Jul','Aug','Sep','Oct','Nov','Dec'
+        };
+
+        String monthStr = months[checkIn.month() - 1];
+        Integer startDay = checkIn.day();
+        Integer endDay = checkOut.day();
+        Integer year = checkIn.year();
+
+        return monthStr + ' ' + startDay + '–' + endDay + ', ' + year;
+    }
+
+    private static List<ServiceItem> getServiceItems() {
+        List<ServiceItem> items = new List<ServiceItem>();
+
+        ServiceItem s1 = new ServiceItem();
+        s1.icon = '🔧'; s1.label = 'Report Issue'; s1.description = 'Maintenance request';
+        items.add(s1);
+
+        ServiceItem s2 = new ServiceItem();
+        s2.icon = '🧹'; s2.label = 'Housekeeping'; s2.description = 'Room cleaning';
+        items.add(s2);
+
+        ServiceItem s3 = new ServiceItem();
+        s3.icon = '🍽️'; s3.label = 'Room Service'; s3.description = 'Order food & drinks';
+        items.add(s3);
+
+        ServiceItem s4 = new ServiceItem();
+        s4.icon = '🚗'; s4.label = 'Valet'; s4.description = 'Car service';
+        items.add(s4);
+
+        ServiceItem s5 = new ServiceItem();
+        s5.icon = '💆'; s5.label = 'Spa & Wellness'; s5.description = 'Book treatments';
+        items.add(s5);
+
+        ServiceItem s6 = new ServiceItem();
+        s6.icon = '📞'; s6.label = 'Front Desk'; s6.description = 'General enquiry';
+        items.add(s6);
+
+        return items;
+    }
+}
