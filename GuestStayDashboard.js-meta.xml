@@ -1,1 +1,20 @@
-
+<?xml version="1.0"?>
+<LightningComponentBundle xmlns="http://soap.sforce.com/2006/04/metadata">
+	<isExposed>true</isExposed>
+	<apiVersion>67.0</apiVersion>
+	<masterLabel>Guest Stay Dashboard </masterLabel>
+	<description>Displays guest stay details, checkout countdown, past stays, and quick services. Designed for Experience Cloud guest portal pages.</description>
+	<targets>
+		<target>lightning__HomePage</target>
+		<target>lightning__AppPage</target>
+		<target>lightning__RecordPage</target>
+		<target>lightningCommunity__Default</target>
+		<target>lightningCommunity__Page</target>
+	</targets>
+	 <targetConfigs>
+        <targetConfig targets="lightningCommunity__Default,lightning__AppPage">
+            <property name="roomNumber" type="String" label="Room Number"
+                      description="The room number to display. If blank, reads from ?room= URL parameter." />
+        </targetConfig>
+    </targetConfigs>
+</LightningComponentBundle>
