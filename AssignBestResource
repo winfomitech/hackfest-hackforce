@@ -1,0 +1,145 @@
+public without sharing class AssignBestResource {
+
+    public class Request {
+        @InvocableVariable(required=true) public String roomNumber;
+        @InvocableVariable(required=true) public String subject;
+        @InvocableVariable(required=true) public String description;
+        @InvocableVariable(required=true) public String problemCategory;
+        @InvocableVariable(required=true) public String sentiment;
+        @InvocableVariable(required=true) public String severity;
+    }
+
+    public class Response {
+        @InvocableVariable public Boolean  found;
+        @InvocableVariable public Id       caseId;
+        @InvocableVariable public String   guestName;
+        @InvocableVariable public String   loyaltyTier;
+        @InvocableVariable public Integer  priorComplaintCount;
+        @InvocableVariable public Boolean  assigned;
+        @InvocableVariable public String   assignedResourceName;
+        @InvocableVariable public Integer  etaMinutes;
+        @InvocableVariable public DateTime etaTime;
+        @InvocableVariable public String   etaFormatted;
+        @InvocableVariable public String   floorManagerName;
+    }
+
+    private static Map<String, Integer> BASE_MINUTES = new Map<String, Integer>{
+        'Electrical'   => 20,
+        'Plumbing'     => 25,
+        'Housekeeping' => 10,
+        'General'      => 15
+    };
+    private static final Integer QUEUE_MINUTES_PER_CASE = 15;
+
+    @InvocableMethod(label='Log Issue and Assign Resource'
+        description='Given the room number and the classified issue, resolves the checked-in guest, creates the Case, and assigns the least-busy on-duty employee with an ETA — all in one call.')
+    public static List<Response> logAndAssign(List<Request> requests) {
+        List<Response> responses = new List<Response>();
+
+        for (Request req : requests) {
+            Response r = new Response();
+            r.found = false;
+            r.assigned = false;
+            r.priorComplaintCount = 0;
+
+            // Step 1: resolve Room
+            List<Room__c> rooms = [SELECT Id FROM Room__c WHERE Name = :req.roomNumber LIMIT 1];
+            if (rooms.isEmpty()) { responses.add(r); continue; }
+            Id roomId = rooms[0].Id;
+
+            // Step 2: resolve active Guest Stay + Contact
+            List<Guest_Stay__c> stays = [
+                SELECT Id, Guest__c, Guest__r.Name, Guest__r.Loyalty_Tier__c
+                FROM Guest_Stay__c
+                WHERE Room__c = :roomId AND Status__c = 'Active'
+                ORDER BY Check_In_Date__c DESC LIMIT 1
+            ];
+            if (stays.isEmpty()) { responses.add(r); continue; }
+
+            Guest_Stay__c stay = stays[0];
+            r.found       = true;
+            r.guestName   = stay.Guest__r.Name;
+            r.loyaltyTier = stay.Guest__r.Loyalty_Tier__c;
+            r.priorComplaintCount = [
+                SELECT COUNT() FROM Case WHERE Guest_Stay__r.Guest__c = :stay.Guest__c
+            ];
+
+            // Step 3: create the Case
+            Case c = new Case(
+                Subject             = req.subject,
+                Description         = req.description,
+                Problem_Category__c = req.problemCategory,
+                Sentiment__c        = req.sentiment,
+                Severity__c         = req.severity,
+                Guest_Stay__c       = stay.Id,
+                Room__c             = roomId
+            );
+            insert c;
+            r.caseId = c.Id;
+
+            // Step 4: assign best resource + ETA
+            Resource__c best = pickBest(req.problemCategory);
+            if (best == null && req.problemCategory != 'General') {
+                best = pickBest('General');
+            }
+
+            if (best != null) {
+                Integer openBefore = (best.Open_Case_Count__c == null) ? 0 : Integer.valueOf(best.Open_Case_Count__c);
+                Integer etaMin = calculateEta(req.problemCategory, req.severity, openBefore);
+                DateTime eta   = DateTime.now().addMinutes(etaMin);
+                Resource__c fm = resolveFloorManager(roomId);
+
+                c.Assigned_Resource__c     = best.Id;
+                c.Estimated_Attend_Time__c = eta;
+                c.SLA_Target_Time__c       = eta;
+                if (fm != null) c.Floor_Manager__c = fm.Id;
+                update c;
+
+                best.Open_Case_Count__c = openBefore + 1;
+                update best;
+
+                r.assigned             = true;
+                r.assignedResourceName = best.Name;
+                r.etaMinutes           = etaMin;
+                r.etaTime              = eta;
+                r.etaFormatted         = eta.format('h:mm a');
+                r.floorManagerName     = (fm != null) ? fm.Name : null;
+
+                 // --- Send WhatsApp notification to floor manager (and employee) ---
+                NotifyFloorManagerWhatsApp.Request notifyReq = new NotifyFloorManagerWhatsApp.Request();
+                notifyReq.caseId = c.Id;
+                NotifyFloorManagerWhatsApp.notify(
+                    new List<NotifyFloorManagerWhatsApp.Request>{ notifyReq }
+                );
+            
+            }
+            responses.add(r);
+        }
+        return responses;
+    }
+
+    @TestVisible
+    private static Integer calculateEta(String category, String severity, Integer openBefore) {
+        Integer base = BASE_MINUTES.containsKey(category) ? BASE_MINUTES.get(category) : 15;
+        Double sevMult = (severity == 'High') ? 0.0 : (severity == 'Low') ? 1.5 : 1.0;
+        Double total = base + (QUEUE_MINUTES_PER_CASE * openBefore * sevMult);
+        return (Integer)(Math.ceil(total / 5.0) * 5);
+    }
+
+    private static Resource__c pickBest(String dept) {
+        List<Resource__c> pool = [
+            SELECT Id, Name, Open_Case_Count__c, Is_On_Duty__c FROM Resource__c
+            WHERE Role__c = 'Employee' AND Department__c = :dept AND Is_Available__c = true
+            ORDER BY Open_Case_Count__c ASC NULLS FIRST
+        ];
+        for (Resource__c res : pool) if (res.Is_On_Duty__c == true) return res;
+        return pool.isEmpty() ? null : pool[0];
+    }
+
+    private static Resource__c resolveFloorManager(Id roomId) {
+        if (roomId == null) return null;
+        List<Room__c> rooms = [SELECT Floor_Manager__c, Floor_Manager__r.Name FROM Room__c WHERE Id = :roomId LIMIT 1];
+        if (rooms.isEmpty() || rooms[0].Floor_Manager__c == null) return null;
+        return new Resource__c(Id = rooms[0].Floor_Manager__c, Name = rooms[0].Floor_Manager__r.Name);
+    }
+}
