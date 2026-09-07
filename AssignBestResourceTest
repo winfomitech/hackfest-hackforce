@@ -1,0 +1,76 @@
+@isTest
+private class AssignBestResourceTest {
+
+    @testSetup
+    static void setup() {
+        List<Resource__c> res = new List<Resource__c>{
+            new Resource__c(Name='Vijay', Role__c='Employee', Department__c='Electrical',
+                Shift_Start__c=Time.newInstance(0,0,0,0), Shift_End__c=Time.newInstance(23,59,0,0),
+                Is_Available__c=true, Open_Case_Count__c=0),
+            new Resource__c(Name='Arun', Role__c='Employee', Department__c='Electrical',
+                Shift_Start__c=Time.newInstance(0,0,0,0), Shift_End__c=Time.newInstance(23,59,0,0),
+                Is_Available__c=true, Open_Case_Count__c=5),
+            new Resource__c(Name='Ramesh', Role__c='Employee', Department__c='General',
+                Shift_Start__c=Time.newInstance(0,0,0,0), Shift_End__c=Time.newInstance(23,59,0,0),
+                Is_Available__c=true, Open_Case_Count__c=0),
+            new Resource__c(Name='Manager B', Role__c='Floor Manager', Floor__c=2,
+                Shift_Start__c=Time.newInstance(0,0,0,0), Shift_End__c=Time.newInstance(23,59,0,0),
+                Is_Available__c=true, WhatsApp_Number__c='+910000000000')
+        };
+        insert res;
+
+        Room__c rm = new Room__c(Name='204', Floor__c=2, Floor_Manager__c=res[3].Id);
+        insert rm;
+    }
+
+    @isTest
+    static void testAssignsLeastBusyOnDutyAndSetsEta() {
+        Room__c rm = [SELECT Id FROM Room__c LIMIT 1];
+        Case c = new Case(Subject='AC broken', Problem_Category__c='Electrical',
+                          Severity__c='High', Room__c=rm.Id);
+        insert c;
+
+        AssignBestResource.Request req = new AssignBestResource.Request();
+        req.caseId = c.Id;
+
+        Test.startTest();
+        List<AssignBestResource.Response> res =
+            AssignBestResource.assign(new List<AssignBestResource.Request>{ req });
+        Test.stopTest();
+
+        System.assertEquals(true, res[0].assigned);
+        System.assertEquals('Vijay', res[0].assignedResourceName, 'Least-busy on-duty electrician wins');
+        System.assertEquals('Manager B', res[0].floorManagerName, 'Floor manager resolved from room');
+        // High severity => queue penalty 0 => ETA == base for Electrical (20)
+        System.assertEquals(20, res[0].etaMinutes);
+
+        Case up = [SELECT Assigned_Resource__c, Estimated_Attend_Time__c, Floor_Manager__c FROM Case WHERE Id=:c.Id];
+        System.assertNotEquals(null, up.Assigned_Resource__c);
+        System.assertNotEquals(null, up.Estimated_Attend_Time__c);
+        System.assertNotEquals(null, up.Floor_Manager__c);
+    }
+
+    @isTest
+    static void testEtaQueuePenaltyAndGeneralFallback() {
+        // No plumbers exist -> falls back to General (Ramesh, open 0)
+        Case c = new Case(Subject='Odd', Problem_Category__c='Plumbing', Severity__c='Medium');
+        insert c;
+
+        AssignBestResource.Request req = new AssignBestResource.Request();
+        req.caseId = c.Id;
+
+        Test.startTest();
+        List<AssignBestResource.Response> res =
+            AssignBestResource.assign(new List<AssignBestResource.Request>{ req });
+        Test.stopTest();
+
+        System.assertEquals('Ramesh', res[0].assignedResourceName, 'General fallback');
+
+        // Direct ETA math check: Housekeeping base 10, 2 open, Medium => 10 + 15*2*1 = 40
+        System.assertEquals(40, AssignBestResource.calculateEta('Housekeeping', 'Medium', 2));
+        // Low severity same load => 10 + 15*2*1.5 = 55
+        System.assertEquals(55, AssignBestResource.calculateEta('Housekeeping', 'Low', 2));
+        // High jumps queue => base only
+        System.assertEquals(10, AssignBestResource.calculateEta('Housekeeping', 'High', 2));
+    }
+}
