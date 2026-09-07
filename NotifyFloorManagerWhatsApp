@@ -1,0 +1,105 @@
+public without sharing class NotifyFloorManagerWhatsApp {
+    
+    private static final String ACCOUNT_SID = 'ACffd2dce30091fb54';
+    private static final Boolean NOTIFY_EMPLOYEE = true;
+    private static final String TWILIO_FROM = 'whatsapp:+14155238886';
+    
+    public class Request { 
+        @InvocableVariable(required=true) public Id caseId; 
+    }
+    
+    @InvocableMethod(label='Notify Floor Manager via WhatsApp')
+    public static void notify(List<Request> reqs) {
+        Set<Id> ids = new Set<Id>();
+        for (Request r : reqs) {
+            if (r.caseId != null) ids.add(r.caseId);
+        }
+        
+        if (!ids.isEmpty()) {
+            // Enqueue Queueable Job instead of calling @future
+            System.enqueueJob(new WhatsAppQueueable(ids));
+        }
+    }
+    
+    // Queueable Class replacing @future to support Agentforce execution contexts
+    public class WhatsAppQueueable implements Queueable, Database.AllowsCallouts {
+        private Set<Id> caseIds;
+        
+        public WhatsAppQueueable(Set<Id> caseIds) {
+            this.caseIds = caseIds;
+        }
+        
+        public void execute(QueueableContext context) {
+            for (Case c : [
+                SELECT Id, Problem_Category__c, Severity__c, Estimated_Attend_Time__c,
+                       Room__r.Name,
+                       Assigned_Resource__r.Name, Assigned_Resource__r.WhatsApp_Number__c,
+                       Floor_Manager__r.Name, Floor_Manager__r.WhatsApp_Number__c,
+                       Guest_Stay__r.Guest__r.Name
+                FROM Case WHERE Id IN :caseIds
+            ]) {
+                String eta = (c.Estimated_Attend_Time__c != null)
+                    ? c.Estimated_Attend_Time__c.format('h:mm a') : 'shortly';
+                String guest = (c.Guest_Stay__r != null && c.Guest_Stay__r.Guest__r != null)
+                    ? c.Guest_Stay__r.Guest__r.Name : 'Guest';
+
+                if (c.Floor_Manager__r != null && c.Floor_Manager__r.WhatsApp_Number__c != null) {
+                    String mgrMsg = '🚨 New Guest Issue Detected\n'
+                        + '🏠 Room: ' + c.Room__r.Name + '\n'
+                        + '⚠️ Issue: ' + c.Problem_Category__c + ' (' + c.Severity__c + ')\n'
+                        + '👤 Guest: ' + guest + '\n'
+                        + '👷 Assigned: ' + c.Assigned_Resource__r.Name + '\n'
+                        + 'Please inform them.\n'
+                        + '⏰ Target: by ' + eta;
+                    sendCallout(c.Floor_Manager__r.WhatsApp_Number__c, mgrMsg);
+                }
+                
+                if (NOTIFY_EMPLOYEE && c.Assigned_Resource__r != null
+                    && c.Assigned_Resource__r.WhatsApp_Number__c != null) {
+                    String empMsg = '*You have a new job*\n'
+                        + '🏠 Room: ' + c.Room__r.Name + ' — ' + c.Problem_Category__c
+                        + ' (' + c.Severity__c + ')\n'
+                        + '⏰ Please attend by ' + eta;
+                    sendCallout(c.Assigned_Resource__r.WhatsApp_Number__c, empMsg);
+                }
+            }
+        }
+    }
+
+    public static String normalizeToE164(String rawNumber) {
+        if (String.isBlank(rawNumber)) return null;
+        String cleaned = rawNumber.trim();
+        Boolean hasPlus = cleaned.startsWith('+');
+        cleaned = cleaned.replaceAll('[^0-9]', '');
+
+        if (hasPlus) return '+' + cleaned;
+        if (cleaned.length() == 10) return '+91' + cleaned;
+        if (cleaned.length() == 12 && cleaned.startsWith('91')) return '+' + cleaned;
+        return '+' + cleaned;
+    }
+
+    private static void sendCallout(String toNumber, String body) {
+        HttpRequest req = new HttpRequest();
+        String normalizedTo = normalizeToE164(toNumber);
+        String endpoint = 'callout:Twilio_Named_Credential/2010-04-01/Accounts/' + ACCOUNT_SID + '/Messages.json';
+        
+        req.setEndpoint(endpoint);
+        req.setMethod('POST');
+        req.setHeader('Content-Type', 'application/x-www-form-urlencoded');
+        
+        String payload = 'To=' + EncodingUtil.urlEncode('whatsapp:' + normalizedTo, 'UTF-8')
+            + '&From=' + EncodingUtil.urlEncode(TWILIO_FROM, 'UTF-8')
+            + '&Body=' + EncodingUtil.urlEncode(body, 'UTF-8');
+            
+        req.setBody(payload);
+        
+        try { 
+            Http http = new Http();
+            HttpResponse res = http.send(req);
+            System.debug('STATUS: ' + res.getStatusCode());
+            System.debug('BODY: ' + res.getBody());
+        } catch (Exception e) {
+            System.debug('WA send failed: ' + e.getMessage()); 
+        }
+    }
+}
