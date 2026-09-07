@@ -1,1 +1,222 @@
+<template>
+        <template lwc:if={isLoading}>
+            <div class="loading-wrapper">
+                <lightning-spinner alternative-text="Loading" size="medium"></lightning-spinner>
+                <p class="loading-text">Loading your stay details...</p>
+            </div>
+        </template>
 
+        <template lwc:if={hasError}>
+            <div class="error-wrapper">
+                <div class="error-icon">⚠️</div>
+                <p class="error-text">Unable to find an active stay for this room.</p>
+                <p class="error-sub">Please contact the front desk for assistance.</p>
+            </div>
+        </template>
+
+        <template lwc:if={hasData}>
+            <div class="wrapper">
+                <div class="main-container">
+
+                    <!-- ═══ HEADER ═══ -->
+                    <div class="header">
+                        <div class="header-top">
+                            <div>
+                                <div class="hotel-brand">HIGH POINT HARBOR</div>
+                                <div class="hotel-sub">Guest Portal</div>
+                            </div>
+                            <div class="room-badge">
+                                <div class="room-number">{roomNumber}</div>
+                                <div class="room-floor">Floor {floorNumber}</div>
+                            </div>
+                        </div>
+
+                        <div class="guest-card">
+                            <div class="avatar">{guestInitials}</div>
+                            <div class="guest-info">
+                                <div class="guest-name">{guestName}</div>
+                                <div class="badge-row">
+                                    <span class={loyaltyBadgeClass}>{loyaltyTier}</span>
+                                    <template lwc:if={memberSince}>
+                                        <span class="member-id">Since {memberSince}</span>
+                                    </template>
+                                </div>
+                                <div class="member-meta">{totalStays} total stays</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ═══ CHECKOUT TIMER ═══ -->
+                    <div class="timer-section">
+                        <div class="timer-label">CHECKOUT COUNTDOWN</div>
+                        <div class="timer-grid">
+                            <div class="timer-block">
+                                <div class="timer-value">{timerDays}</div>
+                                <div class="timer-unit">Days</div>
+                            </div>
+                            <div class="timer-block">
+                                <div class="timer-value">{timerHours}</div>
+                                <div class="timer-unit">Hours</div>
+                            </div>
+                            <div class="timer-block">
+                                <div class="timer-value">{timerMinutes}</div>
+                                <div class="timer-unit">Mins</div>
+                            </div>
+                            <div class="timer-block">
+                                <div class="timer-value">{timerSeconds}</div>
+                                <div class="timer-unit">Secs</div>
+                            </div>
+                        </div>
+                        <div class="checkout-date">Checkout: {checkoutDateFormatted}</div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" style={progressStyle}></div>
+                        </div>
+                        <div class="progress-labels">
+                            <span>Check-in</span>
+                            <span>{stayProgressPercent}% completed</span>
+                            <span>Check-out</span>
+                        </div>
+                    </div>
+
+                    <!-- ═══ TAB NAVIGATION ═══ -->
+                    <div class="tab-bar">
+                        <button class={stayTabClass} data-tab="stay" onclick={handleTabClick}>
+                            🏨 Current Stay
+                        </button>
+                        <button class={historyTabClass} data-tab="history" onclick={handleTabClick}>
+                            📋 Past Stays
+                        </button>
+                        <!-- <button class={servicesTabClass} data-tab="services" onclick={handleTabClick}>
+                            🛎️ Services
+                        </button> -->
+                    </div>
+
+                    <!-- ═══ TAB CONTENT ═══ -->
+                    <div class="tab-content">
+
+                        <!-- CURRENT STAY TAB -->
+                        <template lwc:if={isStayTab}>
+                            <div class="stay-detail">
+                                <div class="detail-header">
+                                    <span class="room-type">{roomType}</span>
+                                    <span class="rate-tag">{rateDisplay}/night</span>
+                                </div>
+                                <div class="detail-grid">
+                                    <div class="detail-item">
+                                        <div class="detail-label">CHECK-IN</div>
+                                        <div class="detail-value">{checkinDateFormatted}</div>
+                                    </div>
+                                    <div class="detail-item">
+                                        <div class="detail-label">CHECK-OUT</div>
+                                        <div class="detail-value">{checkoutDateFormatted}</div>
+                                    </div>
+                                    <div class="detail-item">
+                                        <div class="detail-label">DURATION</div>
+                                        <div class="detail-value">{stayNights} Nights</div>
+                                    </div>
+                                    <div class="detail-item">
+                                        <div class="detail-label">TOTAL</div>
+                                        <div class="detail-value">{totalCost}</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Amenities -->
+                            <template lwc:if={hasAmenities}>
+                                <div class="amenities-section">
+                                    <div class="section-title">Room Amenities</div>
+                                    <div class="amenities-grid">
+                                        <template for:each={amenitiesList} for:item="amenity">
+                                            <div key={amenity.key} class="amenity-chip">
+                                                {amenity.icon} {amenity.label}
+                                            </div>
+                                        </template>
+                                    </div>
+                                </div>
+                            </template>
+
+                            <!-- Wi-Fi -->
+                            <template lwc:if={hasWifiCode}>
+                                <div class="wifi-section">
+                                    <div class="wifi-row">
+                                        <div>
+                                            <div class="section-title">Wi-Fi Access</div>
+                                            <div class="wifi-code">{wifiDisplay}</div>
+                                        </div>
+                                        <button class="wifi-toggle" onclick={toggleWifi}>
+                                            {wifiButtonLabel}
+                                        </button>
+                                    </div>
+                                </div>
+                            </template>
+
+                            <!-- Special Requests -->
+                            <template lwc:if={hasSpecialRequests}>
+                                <div class="requests-section">
+                                    <div class="section-title">Special Requests</div>
+                                    <template for:each={specialRequestsList} for:item="request">
+                                        <div key={request.key} class="request-item">
+                                            <span class="request-dot">●</span> {request.value}
+                                        </div>
+                                    </template>
+                                </div>
+                            </template>
+                        </template>
+
+                        <!-- PAST STAYS TAB -->
+                        <template lwc:if={isHistoryTab}>
+                            <div class="history-header">
+                                <span class="section-title">Stay History</span>
+                                <span class="history-count">{pastStayCount} previous stays</span>
+                            </div>
+                            <template lwc:if={hasPastStays}>
+                                <template for:each={pastStays} for:item="stay">
+                                    <div key={stay.id} class="history-card">
+                                        <div class="history-top">
+                                            <div>
+                                                <div class="history-room">Room {stay.room}</div>
+                                                <div class="history-type">{stay.roomType}</div>
+                                            </div>
+                                            <div class="history-dates">{stay.dates}</div>
+                                        </div>
+                                        <div class="history-bottom">
+                                            <span class="history-nights">{stay.nights} nights</span>
+                                            <span class="history-rating">{stay.ratingStars}</span>
+                                        </div>
+                                    </div>
+                                </template>
+                            </template>
+                            <template lwc:if={noPastStays}>
+                                <div class="empty-state">
+                                    <div class="empty-icon">🏨</div>
+                                    <p class="empty-text">This is your first stay with us!</p>
+                                    <p class="empty-sub">We hope you're enjoying it.</p>
+                                </div>
+                            </template>
+                        </template>
+
+                        <!-- SERVICES TAB -->
+                        <template lwc:if={isServicesTab}>
+                            <div class="section-title">Quick Services</div>
+                            <div class="services-grid">
+                                <template for:each={serviceItems} for:item="service">
+                                    <button key={service.label} class="service-card"
+                                            data-service={service.label} onclick={handleServiceClick}>
+                                        <div class="service-icon">{service.icon}</div>
+                                        <div class="service-label">{service.label}</div>
+                                        <div class="service-desc">{service.description}</div>
+                                    </button>
+                                </template>
+                            </div>
+                        </template>
+                    </div>
+
+                    <!-- ═══ FOOTER ═══ -->
+                    <div class="footer">
+                        <div class="footer-brand">HIGH POINT HARBOR</div>
+                        <div class="footer-text">Need help? Tap Services or message us on WhatsApp</div>
+                    </div>
+                </div>
+            </div>
+        </template>
+    </template>
