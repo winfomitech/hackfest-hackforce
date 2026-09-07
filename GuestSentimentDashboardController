@@ -1,0 +1,291 @@
+public with sharing class GuestSentimentDashboardController {
+
+    public class DashboardFilters {
+        @AuraEnabled public List<String> floors;
+        @AuraEnabled public List<String> departments;
+        @AuraEnabled public List<String> severities;
+        @AuraEnabled public List<String> sentiments;
+        @AuraEnabled public String status;          // 'All' | 'Open' | 'Resolved'
+        @AuraEnabled public Boolean escalatedOnly;
+        @AuraEnabled public String dateFrom;         // ISO datetime, optional
+        @AuraEnabled public String dateTo;           // ISO datetime, optional
+    }
+
+    public class CategoryCount implements Comparable {
+        @AuraEnabled public String label;
+        @AuraEnabled public Integer count;
+        public CategoryCount(String label, Integer count) { this.label = label; this.count = count; }
+        public Integer compareTo(Object other) {
+            return ((CategoryCount) other).count - this.count; // descending by count
+        }
+    }
+
+    public class ResourceLoad {
+        @AuraEnabled public String name;
+        @AuraEnabled public String department;
+        @AuraEnabled public String role;
+        @AuraEnabled public Integer openCount;
+        @AuraEnabled public Boolean onDuty;
+        @AuraEnabled public Boolean available;
+        @AuraEnabled public Integer floor;
+    }
+
+    public class TrendPoint {
+        @AuraEnabled public String label;
+        @AuraEnabled public Integer count;
+    }
+
+    public class CaseRow {
+        @AuraEnabled public Id id;
+        @AuraEnabled public String caseNumber;
+        @AuraEnabled public String room;
+        @AuraEnabled public Integer floor;
+        @AuraEnabled public String category;
+        @AuraEnabled public String severity;
+        @AuraEnabled public String sentiment;
+        @AuraEnabled public Boolean isClosed;
+        @AuraEnabled public Boolean escalated;
+        @AuraEnabled public String assignedResource;
+        @AuraEnabled public String floorManager;
+        @AuraEnabled public DateTime createdDate;
+        @AuraEnabled public DateTime estimatedAttendTime;
+        @AuraEnabled public DateTime closedDate;
+    }
+
+    public class FilterOptions {
+        @AuraEnabled public List<String> floors;
+        @AuraEnabled public List<String> departments;
+        @AuraEnabled public List<String> severities;
+        @AuraEnabled public List<String> sentiments;
+    }
+
+    public class DashboardData {
+        @AuraEnabled public Integer totalCases;
+        @AuraEnabled public Integer openCases;
+        @AuraEnabled public Integer resolvedCases;
+        @AuraEnabled public Integer escalatedCases;
+        @AuraEnabled public Decimal avgResolutionMinutes;
+        @AuraEnabled public Decimal avgEtaMinutes;
+        @AuraEnabled public List<CategoryCount> byCategory;
+        @AuraEnabled public List<CategoryCount> bySeverity;
+        @AuraEnabled public List<CategoryCount> bySentiment;
+        @AuraEnabled public List<ResourceLoad> resourceLoad;
+        @AuraEnabled public List<TrendPoint> trend;
+        @AuraEnabled public List<CaseRow> cases;
+    }
+
+    @AuraEnabled(cacheable=true)
+    public static FilterOptions getFilterOptions() {
+        FilterOptions opts = new FilterOptions();
+        opts.departments = picklistValues('Case', 'Problem_Category__c');
+        opts.severities = picklistValues('Case', 'Severity__c');
+        opts.sentiments = picklistValues('Case', 'Sentiment__c');
+
+        Set<String> floorSet = new Set<String>();
+        for (Room__c r : [SELECT Floor__c FROM Room__c WHERE Floor__c != null]) {
+            floorSet.add(String.valueOf(r.Floor__c.intValue()));
+        }
+        opts.floors = new List<String>(floorSet);
+        return opts;
+    }
+
+    private static List<String> picklistValues(String objectName, String fieldName) {
+        List<String> values = new List<String>();
+        Map<String, Schema.SObjectField> fieldMap =
+            Schema.getGlobalDescribe().get(objectName).getDescribe().fields.getMap();
+        for (Schema.PicklistEntry pe : fieldMap.get(fieldName).getDescribe().getPicklistValues()) {
+            values.add(pe.getValue());
+        }
+        return values;
+    }
+
+    @AuraEnabled
+    public static DashboardData getDashboardData(
+        List<String> floors,
+        List<String> departments,
+        List<String> severities,
+        List<String> sentiments,
+        String status,
+        Boolean escalatedOnly,
+        String dateFrom,
+        String dateTo
+    ) {
+        DashboardFilters filters = new DashboardFilters();
+        filters.floors = floors;
+        filters.departments = departments;
+        filters.severities = severities;
+        filters.sentiments = sentiments;
+        filters.status = status;
+        filters.escalatedOnly = escalatedOnly;
+        filters.dateFrom = dateFrom;
+        filters.dateTo = dateTo;
+        Map<String, Object> binds = new Map<String, Object>();
+        List<String> whereConditions = new List<String>();
+
+        // Scope to Guest Sentiment Radar cases only — this org has unrelated bundled
+        // demo Case data (no Room__c) that must never appear in these metrics.
+        whereConditions.add('Room__c != null');
+
+        if (filters != null && filters.floors != null && !filters.floors.isEmpty()) {
+            List<Decimal> floorNums = new List<Decimal>();
+            for (String f : filters.floors) floorNums.add(Decimal.valueOf(f));
+            whereConditions.add('Room__r.Floor__c IN :floorNums');
+            binds.put('floorNums', floorNums);
+        }
+        if (filters != null && filters.departments != null && !filters.departments.isEmpty()) {
+            whereConditions.add('Problem_Category__c IN :departments');
+            binds.put('departments', filters.departments);
+        }
+        if (filters != null && filters.severities != null && !filters.severities.isEmpty()) {
+            whereConditions.add('Severity__c IN :severities');
+            binds.put('severities', filters.severities);
+        }
+        if (filters != null && filters.sentiments != null && !filters.sentiments.isEmpty()) {
+            whereConditions.add('Sentiment__c IN :sentiments');
+            binds.put('sentiments', filters.sentiments);
+        }
+        if (filters != null && filters.status == 'Open') {
+            whereConditions.add('IsClosed = false');
+        } else if (filters != null && filters.status == 'Resolved') {
+            whereConditions.add('IsClosed = true');
+        }
+        if (filters != null && filters.escalatedOnly == true) {
+            whereConditions.add('Escalated__c = true');
+        }
+        if (filters != null && String.isNotBlank(filters.dateFrom)) {
+            DateTime fromDt = (DateTime) JSON.deserialize('"' + filters.dateFrom + '"', DateTime.class);
+            whereConditions.add('CreatedDate >= :fromDt');
+            binds.put('fromDt', fromDt);
+        }
+        if (filters != null && String.isNotBlank(filters.dateTo)) {
+            DateTime toDt = (DateTime) JSON.deserialize('"' + filters.dateTo + '"', DateTime.class);
+            whereConditions.add('CreatedDate <= :toDt');
+            binds.put('toDt', toDt);
+        }
+
+        String whereClause = whereConditions.isEmpty() ? '' : ' WHERE ' + String.join(whereConditions, ' AND ');
+        String query =
+            'SELECT Id, CaseNumber, Room__r.Name, Room__r.Floor__c, Problem_Category__c, ' +
+            'Severity__c, Sentiment__c, IsClosed, Escalated__c, Assigned_Resource__r.Name, ' +
+            'Floor_Manager__r.Name, CreatedDate, ClosedDate, Estimated_Attend_Time__c ' +
+            'FROM Case' + whereClause + ' ORDER BY CreatedDate DESC LIMIT 500';
+
+        List<Case> cases = Database.queryWithBinds(query, binds, AccessLevel.USER_MODE);
+
+        DashboardData data = new DashboardData();
+        data.totalCases = cases.size();
+        data.openCases = 0;
+        data.resolvedCases = 0;
+        data.escalatedCases = 0;
+
+        Map<String, Integer> byCategory = new Map<String, Integer>();
+        Map<String, Integer> bySeverity = new Map<String, Integer>();
+        Map<String, Integer> bySentiment = new Map<String, Integer>();
+        Map<String, Integer> byDay = new Map<String, Integer>();
+
+        Decimal totalResolutionMinutes = 0;
+        Integer resolvedWithDates = 0;
+        Decimal totalEtaMinutes = 0;
+        Integer withEta = 0;
+
+        List<CaseRow> rows = new List<CaseRow>();
+
+        for (Case c : cases) {
+            if (c.IsClosed) data.resolvedCases++;
+            else data.openCases++;
+            if (c.Escalated__c == true) data.escalatedCases++;
+
+            if (String.isNotBlank(c.Problem_Category__c)) {
+                byCategory.put(c.Problem_Category__c, (byCategory.containsKey(c.Problem_Category__c) ? byCategory.get(c.Problem_Category__c) : 0) + 1);
+            }
+            if (String.isNotBlank(c.Severity__c)) {
+                bySeverity.put(c.Severity__c, (bySeverity.containsKey(c.Severity__c) ? bySeverity.get(c.Severity__c) : 0) + 1);
+            }
+            if (String.isNotBlank(c.Sentiment__c)) {
+                bySentiment.put(c.Sentiment__c, (bySentiment.containsKey(c.Sentiment__c) ? bySentiment.get(c.Sentiment__c) : 0) + 1);
+            }
+            if (c.CreatedDate != null) {
+                String dayKey = c.CreatedDate.format('yyyy-MM-dd');
+                byDay.put(dayKey, (byDay.containsKey(dayKey) ? byDay.get(dayKey) : 0) + 1);
+            }
+            // Guard against bad/manually-edited timestamps (a promise or close time that
+            // predates the case's own creation is invalid data, not a real duration).
+            if (c.IsClosed && c.ClosedDate != null && c.CreatedDate != null && c.ClosedDate >= c.CreatedDate) {
+                totalResolutionMinutes += (c.ClosedDate.getTime() - c.CreatedDate.getTime()) / 60000.0;
+                resolvedWithDates++;
+            }
+            if (c.Estimated_Attend_Time__c != null && c.CreatedDate != null && c.Estimated_Attend_Time__c >= c.CreatedDate) {
+                totalEtaMinutes += (c.Estimated_Attend_Time__c.getTime() - c.CreatedDate.getTime()) / 60000.0;
+                withEta++;
+            }
+
+            CaseRow row = new CaseRow();
+            row.id = c.Id;
+            row.caseNumber = c.CaseNumber;
+            row.room = c.Room__r != null ? c.Room__r.Name : null;
+            row.floor = (c.Room__r != null && c.Room__r.Floor__c != null) ? c.Room__r.Floor__c.intValue() : null;
+            row.category = c.Problem_Category__c;
+            row.severity = c.Severity__c;
+            row.sentiment = c.Sentiment__c;
+            row.isClosed = c.IsClosed;
+            row.escalated = c.Escalated__c;
+            row.assignedResource = c.Assigned_Resource__r != null ? c.Assigned_Resource__r.Name : null;
+            row.floorManager = c.Floor_Manager__r != null ? c.Floor_Manager__r.Name : null;
+            row.createdDate = c.CreatedDate;
+            row.estimatedAttendTime = c.Estimated_Attend_Time__c;
+            row.closedDate = c.ClosedDate;
+            rows.add(row);
+        }
+
+        data.avgResolutionMinutes = resolvedWithDates > 0 ? (totalResolutionMinutes / resolvedWithDates).setScale(1) : 0;
+        data.avgEtaMinutes = withEta > 0 ? (totalEtaMinutes / withEta).setScale(1) : 0;
+        data.byCategory = toSortedList(byCategory);
+        data.bySeverity = toSortedList(bySeverity);
+        data.bySentiment = toSortedList(bySentiment);
+        data.trend = toTrendList(byDay);
+        data.cases = rows;
+        data.resourceLoad = getResourceLoad();
+        return data;
+    }
+
+    private static List<CategoryCount> toSortedList(Map<String, Integer> counts) {
+        List<CategoryCount> result = new List<CategoryCount>();
+        for (String key : counts.keySet()) result.add(new CategoryCount(key, counts.get(key)));
+        result.sort();
+        return result;
+    }
+
+    private static List<TrendPoint> toTrendList(Map<String, Integer> byDay) {
+        List<String> days = new List<String>(byDay.keySet());
+        days.sort();
+        List<TrendPoint> points = new List<TrendPoint>();
+        for (String d : days) {
+            TrendPoint p = new TrendPoint();
+            p.label = d;
+            p.count = byDay.get(d);
+            points.add(p);
+        }
+        return points;
+    }
+
+    private static List<ResourceLoad> getResourceLoad() {
+        List<ResourceLoad> loads = new List<ResourceLoad>();
+        for (Resource__c r : [
+            SELECT Name, Department__c, Role__c, Open_Case_Count__c, Is_Available__c, Is_On_Duty__c, Floor__c
+            FROM Resource__c
+            WHERE Role__c = 'Employee'
+            ORDER BY Open_Case_Count__c DESC NULLS LAST
+        ]) {
+            ResourceLoad rl = new ResourceLoad();
+            rl.name = r.Name;
+            rl.department = r.Department__c;
+            rl.role = r.Role__c;
+            rl.openCount = r.Open_Case_Count__c != null ? r.Open_Case_Count__c.intValue() : 0;
+            rl.onDuty = r.Is_On_Duty__c;
+            rl.available = r.Is_Available__c;
+            rl.floor = r.Floor__c != null ? r.Floor__c.intValue() : null;
+            loads.add(rl);
+        }
+        return loads;
+    }
+}
